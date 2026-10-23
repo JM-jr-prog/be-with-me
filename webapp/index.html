@@ -76,37 +76,37 @@ let mode = "ask", theme = "ask", n = 0, dodging = false, wasNear = false, skipCl
 let W, H, dpr, noPos = { x: 0, y: 0 };
 const hearts = [], flowers = [], rain = [];
 
-// ---------- audio (Web Audio so volume fades work on phones too) ----------
-let ctx = null, cur = null;
-const A = {};
+// ---------- audio (one element + Web Audio gain, so volume fades work on phones) ----------
+// One element plays every song, one after the other. Several elements at once made phones
+// download all three songs together (slow, late start) and pause each other (cut-offs).
+let ctx = null, gain = null, el = null, cur = null, token = 0;
 function setupAudio() {
   ctx = new (window.AudioContext || window.webkitAudioContext)();
-  for (const k in SONGS) {
-    const a = new Audio(SONGS[k].src); a.preload = "auto";
-    const g = ctx.createGain(); g.gain.value = 0;
-    ctx.createMediaElementSource(a).connect(g); g.connect(ctx.destination);
-    A[k] = { a, g };
-  }
+  el = new Audio(); el.preload = "auto";
+  gain = ctx.createGain(); gain.gain.value = 0;
+  ctx.createMediaElementSource(el).connect(gain); gain.connect(ctx.destination);
 }
-function level(k, v, sec) {
-  const s = A[k]; if (!s) return;
+function level(v, sec) {
+  if (!gain) return;
   const t = ctx.currentTime;
-  s.g.gain.cancelScheduledValues(t); s.g.gain.setValueAtTime(s.g.gain.value, t);
-  s.g.gain.linearRampToValueAtTime(v, t + Math.max(sec, 0.01));
+  gain.gain.cancelScheduledValues(t); gain.gain.setValueAtTime(gain.gain.value, t);
+  gain.gain.linearRampToValueAtTime(v, t + Math.max(sec, 0.01));
 }
 function play(k) {
-  const s = A[k]; if (!s) return; cur = k;
-  s.a.currentTime = SONGS[k].start;
-  s.g.gain.cancelScheduledValues(ctx.currentTime); s.g.gain.setValueAtTime(0, ctx.currentTime);
-  s.a.play().catch(() => {});
-  level(k, 1, SONGS[k].fade);
+  cur = k; const my = ++token, c = SONGS[k];
+  gain.gain.cancelScheduledValues(ctx.currentTime); gain.gain.setValueAtTime(0, ctx.currentTime);
+  el.src = c.src;
+  const p = el.play(); if (p) p.catch(() => {});          // started right away so phones allow it
+  el.addEventListener("loadedmetadata", () => { if (my === token) el.currentTime = c.start; }, { once: true });
+  const ready = () => { if (my === token) level(1, c.fade); };   // fade in only once the song is at its start point
+  el.addEventListener(c.start ? "seeked" : "playing", ready, { once: true });
 }
 function swap(k) {                       // quick fade-out of the old song, then fade the new one in
   if (!ctx) return;
-  const old = cur && A[cur];
-  if (old) { level(cur, 0, 0.8); setTimeout(() => old.a.pause(), 900); }
-  setTimeout(() => play(k), old ? 800 : 0);
+  if (cur) level(0, 0.8);
+  setTimeout(() => play(k), cur ? 800 : 0);
 }
+document.addEventListener("visibilitychange", () => { if (ctx && ctx.state !== "running") ctx.resume(); });
 
 // ---------- lyrics (looked up on LRCLIB, cached in this browser) ----------
 const LY = {};
@@ -143,10 +143,10 @@ async function loadLyrics(k) {
   if (raw) LY[k] = parseLrc(raw);
 }
 setInterval(() => {
-  const s = cur && A[cur], lines = cur && LY[cur];
+  const lines = cur && LY[cur];
   let text = "";
-  if (s && lines) {
-    const t = s.a.currentTime - LYRIC_OFFSET;
+  if (el && lines) {
+    const t = el.currentTime - LYRIC_OFFSET;
     for (const [time, line] of lines) { if (time <= t) text = line; else break; }
   }
   if ($("lyric").textContent !== text) $("lyric").textContent = text;
@@ -191,7 +191,7 @@ no.onclick = () => {
   if (n >= LET_GO_AT) return letGo();
   yes.style.fontSize = Math.min(18 + n * 2, 38, W / 12) + "px";
   yes.style.padding = (10 + n) + "px " + (26 + n * 2) + "px";
-  level("main", 1 - n / (LET_GO_AT - 1), 1.2);      // the music fades out as they keep saying no
+  level(1 - n / (LET_GO_AT - 1), 1.2);      // the music fades out as they keep saying no
   msg.textContent = PLEAS[Math.min(n - 1, PLEAS.length - 1)];
   no.textContent = NO_LABELS[Math.min(n, NO_LABELS.length - 1)];
   if (n >= DODGE_START) dodging = true;
@@ -211,9 +211,7 @@ function letGo() {
 again.onclick = () => location.reload();
 $("go").onclick = () => {
   $("start").remove();
-  try { setupAudio(); ctx.resume(); play("main");
-    for (const k of ["final", "yes"]) A[k].a.play().then(() => A[k].a.pause()).catch(() => {}); // unlock for phones
-  } catch (e) {}
+  try { setupAudio(); ctx.resume(); play("main"); } catch (e) {}
 };
 
 // ---------- hearts, flowers, rain ----------
