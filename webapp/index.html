@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>💜 A little question 💜</title>
+<style>
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;overflow:hidden;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;-webkit-tap-highlight-color:transparent}
+body{--card:#FCF8FF;--edge:#DCC8FF;--shadow:#A98CF0;--text:#5B21B6;--accent:#A855F7}
+body[data-t=yes]{--card:#FFFDF5;--edge:#F9C8E8;--shadow:#D9A7F5;--text:#7E22CE;--accent:#EC4899}
+body[data-t=no]{--card:#2B2350;--edge:#4C3F85;--shadow:#120E26;--text:#DDD0FF;--accent:#A78BFA}
+.bg{position:fixed;inset:0;opacity:0;transition:opacity 1.8s}
+.bg.on{opacity:1}
+#b-ask,#start{background:linear-gradient(#FFF1FE,#EBD8FF 40%,#C9B2FF 70%,#9F86F5)}
+#b-yes{background:linear-gradient(#FFF9DB,#FFE3F0 40%,#F3CFFF 70%,#C7A9FF)}
+#b-no{background:linear-gradient(#171230,#241B4A 40%,#32265F 70%,#1E1740)}
+canvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}
+#back{z-index:1}#front{z-index:5}
+#card{position:fixed;z-index:2;left:50%;top:max(4vh,env(safe-area-inset-top));transform:translateX(-50%);width:min(560px,90vw);min-height:min(250px,34vh);padding:26px 24px;border-radius:40px;background:var(--card);border:3px solid var(--edge);box-shadow:0 8px 0 var(--shadow);text-align:center;color:var(--text);display:flex;flex-direction:column;justify-content:center;gap:10px;transition:background-color 1.8s,border-color 1.8s,color 1.8s,box-shadow 1.8s}
+#title{font-style:italic;font-size:16px;color:var(--accent);transition:color 1.8s}
+#msg{font-size:clamp(19px,4.6vw,26px);font-weight:700;line-height:1.35;white-space:pre-line}
+#msg.small{font-size:clamp(15px,3.8vw,18px);font-weight:500}
+#yes,#no,#again{position:fixed;z-index:3;border:0;border-radius:999px;cursor:pointer;font:inherit;transform:translate(-50%,-50%);touch-action:manipulation;white-space:nowrap}
+#yes,#again{background:#8B5CF6;color:#fff;font-weight:700;font-size:18px;padding:12px 28px;transition:background .2s}
+#yes:hover,#again:hover{background:#7C3AED}
+#no{background:#F5F3FF;color:#6D28D9;border:2px solid #C4B5FD;font-size:14px;padding:9px 22px;transition:left .3s,top .3s,background .2s}
+#no:hover{background:#EBE4FF}
+[hidden]{display:none!important}
+#lyric{position:fixed;z-index:3;left:0;right:0;bottom:0;padding:0 24px calc(22px + env(safe-area-inset-bottom));text-align:center;font-style:italic;font-size:clamp(19px,4.8vw,24px);color:var(--text);opacity:.7;pointer-events:none;min-height:64px;transition:color 1.8s}
+#start{position:fixed;inset:0;z-index:10;display:grid;place-items:center;text-align:center;color:#5B21B6}
+#start p{font-size:64px;margin:0 0 12px}
+#go{border:0;border-radius:999px;background:#8B5CF6;color:#fff;font:700 20px inherit;font-family:inherit;padding:14px 34px;cursor:pointer}
+</style>
+</head>
+<body data-t="ask">
+<div class="bg on" id="b-ask"></div><div class="bg" id="b-yes"></div><div class="bg" id="b-no"></div>
+<canvas id="back"></canvas>
+<div id="card"><div id="title">✿ for you ✿</div><div id="msg"></div></div>
+<button id="yes">Yes 💜</button><button id="no">No</button><button id="again" hidden>Start over</button>
+<div id="lyric"></div>
+<canvas id="front"></canvas>
+<div id="start"><div><p>💜</p><button id="go">Tap to begin</button></div></div>
+
+<script>
+(() => {
+// ---------- Edit these (or open the page with ?to=Name&from=Name) ----------
+const P = new URLSearchParams(location.search);
+const THEM = P.get("to") || "Their Name", ME = P.get("from") || "Your Name";
+
+// ---------- Songs: put the mp3 files in the same folder as this page ----------
+const SONGS = {
+  main:  { src: "on_bended_knee.mp3", start: 205, fade: 0.05, artist: "Boyz II Men",  title: "On Bended Knee" },
+  final: { src: "ill_be.mp3",         start: 163, fade: 4,    artist: "Edwin McCain", title: "I'll Be" },
+  yes:   { src: "photograph.mp3",     start: 130, fade: 3,    artist: "Ed Sheeran",   title: "Photograph" },
+};
+const DODGE_START = 9, LET_GO_AT = 10, CATCH = 0.1, LYRIC_OFFSET = 0;
+
+const NO_LABELS = ["No","Are you sure?","Really?","Think again…","Pretty please?","Don’t do this","Last chance?","I’m shy now","Catch me!"];
+const PLEAS = ["Hmm… maybe you misclicked? 🥺","Look at that big yes button, it’s lonely 💜","I made this just for you… 🌸","Pretty please? With lavender on top? 🫶","I’ll bring snacks. And hugs. Lots of hugs. 🤗","My heart is doing tiny sad flips… 🥹","Okay, I’m getting nervous now… 🙈","Fine, the No button is hiding. Try catching it! 🏃‍♀️💨"];
+const HEARTS = {
+  ask: ["#FFFFFF","#F5D0FE","#E879F9","#C084FC","#8B5CF6","#FBCFE8","#7C3AED"],
+  yes: ["#FFFFFF","#FDE68A","#F9A8D4","#E879F9","#C084FC","#FCD34D","#FB7185"],
+  no:  ["#6D5BA8","#4C3F85","#7C6BC4","#5B4B96"],
+};
+const FLOWERS = ["#F9A8D4","#FDE68A","#C084FC","#FB7185","#FFFFFF","#A78BFA","#FCA5A5"];
+
+const $ = id => document.getElementById(id);
+const rnd = (a, b) => a + Math.random() * (b - a);
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const hex = c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16));
+const mix = (a, b, t) => { const x = hex(a), y = hex(b); return "rgb(" + x.map((v, i) => Math.round(v + (y[i] - v) * t)).join(",") + ")"; };
+const card = $("card"), msg = $("msg"), yes = $("yes"), no = $("no"), again = $("again");
+
+let mode = "ask", theme = "ask", n = 0, dodging = false, wasNear = false, skipClick = false;
+let W, H, dpr, noPos = { x: 0, y: 0 };
+const hearts = [], flowers = [], rain = [];
+
+// ---------- audio (Web Audio so volume fades work on phones too) ----------
+let ctx = null, cur = null;
+const A = {};
+function setupAudio() {
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  for (const k in SONGS) {
+    const a = new Audio(SONGS[k].src); a.preload = "auto";
+    const g = ctx.createGain(); g.gain.value = 0;
+    ctx.createMediaElementSource(a).connect(g); g.connect(ctx.destination);
+    A[k] = { a, g };
+  }
+}
+function level(k, v, sec) {
+  const s = A[k]; if (!s) return;
+  const t = ctx.currentTime;
+  s.g.gain.cancelScheduledValues(t); s.g.gain.setValueAtTime(s.g.gain.value, t);
+  s.g.gain.linearRampToValueAtTime(v, t + Math.max(sec, 0.01));
+}
+function play(k) {
+  const s = A[k]; if (!s) return; cur = k;
+  s.a.currentTime = SONGS[k].start;
+  s.g.gain.cancelScheduledValues(ctx.currentTime); s.g.gain.setValueAtTime(0, ctx.currentTime);
+  s.a.play().catch(() => {});
+  level(k, 1, SONGS[k].fade);
+}
+function swap(k) {                       // quick fade-out of the old song, then fade the new one in
+  if (!ctx) return;
+  const old = cur && A[cur];
+  if (old) { level(cur, 0, 0.8); setTimeout(() => old.a.pause(), 900); }
+  setTimeout(() => play(k), old ? 800 : 0);
+}
+
+// ---------- lyrics (looked up on LRCLIB, cached in this browser) ----------
+const LY = {};
+const parseLrc = raw => {
+  const out = [];
+  for (const line of raw.split("\n")) {
+    const text = line.replace(/\[\d+:\d+(?:\.\d+)?\]/g, "").trim();
+    for (const m of line.matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)) out.push([+m[1] * 60 + +m[2], text]);
+  }
+  return out.sort((a, b) => a[0] - b[0]);
+};
+async function loadLyrics(k) {
+  const c = SONGS[k], key = "lyrics:" + c.src;
+  let raw = null;
+  try { raw = localStorage.getItem(key); } catch (e) {}
+  if (!raw) {                                  // when served by app.py, Python looks the lyrics up
+    try { const s = await fetch("api/lyrics/" + k); if (s.ok) raw = await s.text(); } catch (e) {}
+    if (raw) try { localStorage.setItem(key, raw); } catch (e) {}
+  }
+  if (!raw) {
+    try {
+      const r = await fetch("https://lrclib.net/api/search?" + new URLSearchParams({ artist_name: c.artist, track_name: c.title }));
+      let best = -1;
+      for (const it of await r.json()) {
+        if (!it.syncedLyrics) continue;
+        const nm = (it.trackName || "").toLowerCase();
+        const sc = (nm === c.title.toLowerCase() && (it.artistName || "").toLowerCase().includes(c.artist.toLowerCase()) ? 2 : 0)
+                 + (/live|remix|acoustic|karaoke/.test(nm + " " + (it.albumName || "").toLowerCase()) ? 0 : 1);
+        if (sc > best) { best = sc; raw = it.syncedLyrics; }
+      }
+      if (raw) try { localStorage.setItem(key, raw); } catch (e) {}
+    } catch (e) {}
+  }
+  if (raw) LY[k] = parseLrc(raw);
+}
+setInterval(() => {
+  const s = cur && A[cur], lines = cur && LY[cur];
+  let text = "";
+  if (s && lines) {
+    const t = s.a.currentTime - LYRIC_OFFSET;
+    for (const [time, line] of lines) { if (time <= t) text = line; else break; }
+  }
+  if ($("lyric").textContent !== text) $("lyric").textContent = text;
+}, 120);
+
+// ---------- layout and the No button ----------
+const zone = () => { const c = card.getBoundingClientRect(), top = c.bottom + 28; return { top, bot: Math.max(top + 70, H - 100) }; };
+function placeYes() { const z = zone(); yes.style.left = W * 0.3 + "px"; yes.style.top = (z.top + z.bot) / 2 + "px"; }
+function setNo(x, y) { noPos = { x, y }; no.style.left = x + "px"; no.style.top = y + "px"; }
+function moveNo(av) {
+  const z = zone(), bw = no.offsetWidth, bh = no.offsetHeight, yr = yes.getBoundingClientRect();
+  for (let i = 0; i < 80; i++) {
+    const x = rnd(bw / 2 + 12, W - bw / 2 - 12), y = rnd(z.top + bh / 2, z.bot - bh / 2);
+    if (x + bw / 2 > yr.left - 24 && x - bw / 2 < yr.right + 24 && y + bh / 2 > yr.top - 24 && y - bh / 2 < yr.bottom + 24) continue;
+    if (av && Math.hypot(x - av.x, y - av.y) < 160) continue;
+    if (Math.hypot(x - noPos.x, y - noPos.y) < 90) continue;
+    return setNo(x, y);
+  }
+  setNo(W - bw / 2 - 16, z.bot - bh / 2);
+}
+document.addEventListener("pointermove", e => {      // mouse: runs away, 10% chance it stays put
+  if (!dodging || mode !== "ask" || e.pointerType !== "mouse") return;
+  const near = Math.abs(e.clientX - noPos.x) < no.offsetWidth / 2 + 40 && Math.abs(e.clientY - noPos.y) < no.offsetHeight / 2 + 40;
+  if (near && !wasNear) { wasNear = true; if (Math.random() >= CATCH) { moveNo({ x: e.clientX, y: e.clientY }); wasNear = false; } }
+  else if (!near) wasNear = false;
+});
+no.addEventListener("pointerdown", e => {            // touch: same 10% chance
+  if (dodging && e.pointerType !== "mouse" && Math.random() >= CATCH) {
+    e.preventDefault(); skipClick = true; setTimeout(() => skipClick = false, 400);
+    moveNo({ x: e.clientX, y: e.clientY });
+  }
+});
+
+// ---------- the story ----------
+function setTheme(t) {
+  theme = t; document.body.dataset.t = t;
+  ["ask", "yes", "no"].forEach(k => $("b-" + k).classList.toggle("on", k === t));
+}
+no.onclick = () => {
+  if (mode !== "ask" || skipClick) return;
+  n++;
+  if (n >= LET_GO_AT) return letGo();
+  yes.style.fontSize = Math.min(18 + n * 2, 38, W / 12) + "px";
+  yes.style.padding = (10 + n) + "px " + (26 + n * 2) + "px";
+  level("main", 1 - n / (LET_GO_AT - 1), 1.2);      // the music fades out as they keep saying no
+  msg.textContent = PLEAS[Math.min(n - 1, PLEAS.length - 1)];
+  no.textContent = NO_LABELS[Math.min(n, NO_LABELS.length - 1)];
+  if (n >= DODGE_START) dodging = true;
+  moveNo();
+};
+function ending() { yes.hidden = no.hidden = true; const z = zone(); again.style.left = W / 2 + "px"; again.style.top = (z.top + z.bot) / 2 + "px"; again.hidden = false; }
+yes.onclick = () => {
+  mode = "yes"; dodging = false; swap("yes"); setTheme("yes"); plant(false); ending();
+  $("title").textContent = "✿ ♥ ✿ ♥ ✿";
+  msg.textContent = `Yay!!! 💜🎉\n\nThank you, ${THEM}.\nI promise to make every day a little softer.\n\n— ${ME}`;
+};
+function letGo() {
+  mode = "letgo"; dodging = false; swap("final"); setTheme("no"); plant(true); ending();
+  $("title").textContent = "🕊️"; msg.className = "small";
+  msg.textContent = `It’s okay, ${THEM}.\n\nThank you for being honest with me, and for every moment we shared. I won’t hold on to something that isn’t meant to stay.\n\nI’m letting go with a full heart, and I’ll always wish you happiness. 💜\n\n— ${ME}`;
+}
+again.onclick = () => location.reload();
+$("go").onclick = () => {
+  $("start").remove();
+  try { setupAudio(); ctx.resume(); play("main");
+    for (const k of ["final", "yes"]) A[k].a.play().then(() => A[k].a.pause()).catch(() => {}); // unlock for phones
+  } catch (e) {}
+};
+
+// ---------- hearts, flowers, rain ----------
+const bc = $("back").getContext("2d"), fc = $("front").getContext("2d");
+function size() {
+  dpr = devicePixelRatio || 1; W = innerWidth; H = innerHeight;
+  for (const c of [$("back"), $("front")]) { c.width = W * dpr; c.height = H * dpr; }
+  bc.setTransform(dpr, 0, 0, dpr, 0, 0); fc.setTransform(dpr, 0, 0, dpr, 0, 0);
+  placeYes(); if (mode === "ask") setNo(Math.min(noPos.x || W * 0.72, W - 60), yes.getBoundingClientRect().top + yes.offsetHeight / 2);
+}
+function spawn(burst) {
+  hearts.push({ x: rnd(10, W - 10), y: burst ? rnd(H / 2, H) : H + 15, t: rnd(0, 6), v: rnd(1, 2.6) * (burst ? 2 : 1), sw: rnd(0.5, 1.8),
+    s: rnd(12, 30), ch: pick(["♥", "♡", "✿", "✦", "❀", "❤"]), c: pick(HEARTS[theme]) });
+}
+function plant(grown) {
+  const cnt = Math.max(6, Math.round(W / 64));
+  for (let i = 0; i < cnt; i++) flowers.push({ x: (i + 0.5) * W / cnt + rnd(-16, 16), y: H + 4, h: rnd(70, 140) * Math.min(1.4, H / 600),
+    sz: rnd(11, 17), n: Math.round(rnd(5, 7)), c: pick(FLOWERS), d: grown ? 0 : rnd(0, 30), g: grown ? 1 : 0, w: 0, s: pick([-1, 1]), r: rnd(0, 6.28) });
+}
+function drawFlower(f) {
+  const g = 1 - Math.pow(1 - f.g, 3); if (g < 0.01) return;
+  const w = f.w, h = f.h * g;
+  const hx = f.x + f.s * w * h * 0.55, hy = f.y - h + w * h * 0.45, mx = f.x + f.s * w * h * 0.08, my = f.y - h * 0.5;
+  f.hx = hx; f.hy = hy;
+  const stem = mix("#5FBF73", "#6B6B4A", w);
+  bc.strokeStyle = stem; bc.fillStyle = stem; bc.lineWidth = 3; bc.lineCap = "round";
+  bc.beginPath(); bc.moveTo(f.x, f.y); bc.quadraticCurveTo(mx, my, hx, hy); bc.stroke();
+  for (const d of [-1, 1]) { bc.beginPath(); bc.ellipse(mx + d * 8, my + w * 8 - d, 8, 4, d * -0.3, 0, 6.3); bc.fill(); }
+  const pr = f.sz * g * (1 - 0.35 * w), vis = Math.max(2, Math.round(f.n * (1 - 0.6 * w)));
+  bc.fillStyle = mix(f.c, "#7A6A8A", w * 0.85);
+  for (let k = 0; k < vis; k++) {
+    const a = 6.283 * k / f.n + f.r;
+    bc.beginPath(); bc.arc(hx + Math.cos(a) * pr * 1.15, hy + Math.sin(a) * pr * 1.15 * (1 - 0.3 * w) + w * pr * 0.6, pr, 0, 6.3); bc.fill();
+  }
+  bc.fillStyle = mix("#FFD166", "#8A7A5A", w);
+  bc.beginPath(); bc.arc(hx, hy, pr * 0.7, 0, 6.3); bc.fill();
+}
+let last = 0, acc = 0;
+function frame(ts) {
+  const dt = Math.min(64, ts - last || 16), k = dt / 40; last = ts;
+  bc.clearRect(0, 0, W, H); fc.clearRect(0, 0, W, H);
+  acc += dt;
+  if (acc > (mode === "ask" ? 300 : mode === "yes" ? 120 : 1500)) {
+    acc = 0;
+    if (mode === "ask") spawn(); else if (mode === "yes") { spawn(1); spawn(1); spawn(1); } else if (Math.random() < 0.3) spawn();
+  }
+  bc.textAlign = "center"; bc.textBaseline = "middle"; bc.globalAlpha = 0.85;
+  for (let i = hearts.length - 1; i >= 0; i--) {
+    const h = hearts[i]; h.t += 0.08 * k; h.y -= h.v * k; h.x += Math.sin(h.t) * h.sw * k;
+    if (h.y < -30 || h.y > H + 30) { hearts.splice(i, 1); continue; }
+    bc.font = h.s + "px sans-serif"; bc.fillStyle = h.c; bc.fillText(h.ch, h.x, h.y);
+  }
+  bc.globalAlpha = 1;
+  for (const f of flowers) {
+    if (f.d > 0) { f.d -= k; continue; }
+    if (mode === "yes" && f.g < 1) f.g = Math.min(1, f.g + 0.018 * k);          // bloom
+    else if (mode === "letgo" && f.w < 1) {                                     // wilt
+      f.w = Math.min(1, f.w + 0.006 * k);
+      if (f.w > 0.1 && f.w < 0.95 && Math.random() < 0.05 * k)
+        hearts.push({ x: f.hx, y: f.hy, t: rnd(0, 6), v: -rnd(0.8, 1.6), sw: rnd(0.3, 1), s: rnd(12, 18), ch: pick(["✿", "❀"]), c: mix(f.c, "#6B5B8A", 0.5) });
+    }
+    drawFlower(f);
+  }
+  if (mode === "letgo") for (let i = 0, c = Math.round(4 * k * W / 640) || 1; i < c; i++) rain.push({ x: rnd(0, W + 60), y: -20, l: rnd(14, 26), v: rnd(14, 22) });
+  fc.strokeStyle = "rgba(169,190,234,.55)"; fc.lineWidth = 1; fc.beginPath();
+  for (let i = rain.length - 1; i >= 0; i--) {
+    const d = rain[i]; d.y += d.v * k; d.x -= 2 * k;
+    if (d.y > H) { rain.splice(i, 1); continue; }
+    fc.moveTo(d.x, d.y); fc.lineTo(d.x - 4, d.y + d.l);
+  }
+  fc.stroke();
+  requestAnimationFrame(frame);
+}
+
+// ---------- go ----------
+msg.textContent = `Hey ${THEM}, it’s ${ME} 💜\n\nWill you stay by my side?`;
+addEventListener("resize", size);
+size(); requestAnimationFrame(frame);
+setNo(W * 0.72, yes.getBoundingClientRect().top + yes.offsetHeight / 2);
+for (const k in SONGS) loadLyrics(k);
+})();
+</script>
+</body>
+</html>
