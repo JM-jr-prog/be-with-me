@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-from flask import Flask, Response, abort, send_from_directory
+from flask import Flask, Response, abort, request, send_from_directory
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 MUSIC = os.path.join(BASE, "music")           # put on_bended_knee.mp3, ill_be.mp3, photograph.mp3 here
@@ -32,9 +32,56 @@ def index():
     return send_from_directory(BASE, "index.html")
 
 
+# MP3 frame tables (layer III), used to cut a song at a start time without any extra tools
+BITRATES = {3: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],      # MPEG 1
+            2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],          # MPEG 2
+            0: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]}          # MPEG 2.5
+SAMPLE_RATES = {3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000]}
+
+
+def mp3_cut(data, start):
+    """Returns (mp3 bytes beginning at the first frame at or after `start` seconds, that frame's time),
+    or None if the file can't be read. A short song that begins at the right spot downloads fast
+    and never has to seek, which is what makes phones play it reliably."""
+    i, t, n = 0, 0.0, len(data)
+    if data[:3] == b"ID3" and n > 10:                      # skip the ID3 tag at the front
+        i = 10 + ((data[6] & 0x7F) << 21 | (data[7] & 0x7F) << 14 | (data[8] & 0x7F) << 7 | (data[9] & 0x7F))
+    while i + 4 <= n:
+        h = int.from_bytes(data[i:i + 4], "big")
+        ver, layer, bri, sri = (h >> 19) & 3, (h >> 17) & 3, (h >> 12) & 15, (h >> 10) & 3
+        if (h >> 21) != 0x7FF or ver == 1 or layer != 1 or bri in (0, 15) or sri == 3:
+            i += 1
+            continue
+        rate, sr, pad = BITRATES[ver][bri] * 1000, SAMPLE_RATES[ver][sri], (h >> 9) & 1
+        size, samples = (144 * rate // sr + pad, 1152) if ver == 3 else (72 * rate // sr + pad, 576)
+        nxt = i + size
+        if nxt + 2 <= n and not (data[nxt] == 0xFF and data[nxt + 1] & 0xE0 == 0xE0):
+            i += 1                                          # not a real frame, keep looking
+            continue
+        if t >= start:
+            return data[i:], t
+        i, t = nxt, t + samples / sr
+    return None
+
+
+_cuts = {}
+
+
 @app.route("/<name>.mp3")
 def music(name):
-    # supports seeking, so the page can start a song partway through
+    start = request.args.get("from", type=float)           # the page asks for the song from its start point
+    path = os.path.join(MUSIC, name + ".mp3")
+    if start and os.path.exists(path):
+        if (name, start) not in _cuts:
+            with open(path, "rb") as f:
+                _cuts[(name, start)] = mp3_cut(f.read(), start)
+        cut = _cuts[(name, start)]
+        if cut:
+            print(f"[music] {name}: sending {len(cut[0]) / 1e6:.1f} MB (from {cut[1]:.0f}s)")
+            resp = Response(cut[0], mimetype="audio/mpeg")
+            resp.headers["X-Trimmed-From"] = f"{cut[1]:.3f}"
+            return resp
+    # otherwise send the whole file (supports seeking)
     return send_from_directory(MUSIC, name + ".mp3", conditional=True)
 
 

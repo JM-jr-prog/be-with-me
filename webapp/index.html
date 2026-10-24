@@ -21,8 +21,11 @@ canvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}
 #title{font-style:italic;font-size:16px;color:var(--accent);transition:color 1.8s}
 #msg{font-size:clamp(19px,4.6vw,26px);font-weight:700;line-height:1.35;white-space:pre-line}
 #msg.small{font-size:clamp(15px,3.8vw,18px);font-weight:500}
-#yes,#no,#again{position:fixed;z-index:3;border:0;border-radius:999px;cursor:pointer;font:inherit;transform:translate(-50%,-50%);touch-action:manipulation;white-space:nowrap}
+#card.wide{width:min(760px,94vw)}
+#card{max-height:calc(100% - 210px);overflow-y:auto;justify-content:safe center}
+#yes,#no,#again,#fix{position:fixed;z-index:3;border:0;border-radius:999px;cursor:pointer;font:inherit;transform:translate(-50%,-50%);touch-action:manipulation;white-space:nowrap}
 #yes,#again{background:#8B5CF6;color:#fff;font-weight:700;font-size:18px;padding:12px 28px;transition:background .2s}
+#fix{left:50%;bottom:130px;z-index:6;background:#EC4899;color:#fff;font-weight:700;font-size:16px;padding:12px 22px}
 #yes:hover,#again:hover{background:#7C3AED}
 #no{background:#F5F3FF;color:#6D28D9;border:2px solid #C4B5FD;font-size:14px;padding:9px 22px;transition:left .3s,top .3s,background .2s}
 #no:hover{background:#EBE4FF}
@@ -30,6 +33,7 @@ canvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}
 #lyric{position:fixed;z-index:3;left:0;right:0;bottom:0;padding:0 24px calc(22px + env(safe-area-inset-bottom));text-align:center;font-style:italic;font-size:clamp(19px,4.8vw,24px);color:var(--text);opacity:.7;pointer-events:none;min-height:64px;transition:color 1.8s}
 #start{position:fixed;inset:0;z-index:10;display:grid;place-items:center;text-align:center;color:#5B21B6}
 #start p{font-size:64px;margin:0 0 12px}
+#go:disabled{opacity:.7;cursor:default}
 #go{border:0;border-radius:999px;background:#8B5CF6;color:#fff;font:700 20px inherit;font-family:inherit;padding:14px 34px;cursor:pointer}
 </style>
 </head>
@@ -38,9 +42,11 @@ canvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}
 <canvas id="back"></canvas>
 <div id="card"><div id="title">✿ for you ✿</div><div id="msg"></div></div>
 <button id="yes">Yes 💜</button><button id="no">No</button><button id="again" hidden>Start over</button>
+<button id="fix" hidden>🔊 Tap to turn on the music</button>
 <div id="lyric"></div>
+<div id="dbg" hidden style="position:fixed;z-index:20;top:0;left:0;right:0;background:#000c;color:#0f0;font:11px monospace;padding:4px;white-space:pre-wrap"></div>
 <canvas id="front"></canvas>
-<div id="start"><div><p>💜</p><button id="go">Tap to begin</button></div></div>
+<div id="start"><div><p>💜</p><button id="go" disabled>Loading music…</button></div></div>
 
 <script>
 (() => {
@@ -56,8 +62,8 @@ const SONGS = {
 };
 const DODGE_START = 9, LET_GO_AT = 10, CATCH = 0.1, LYRIC_OFFSET = 0;
 
-const NO_LABELS = ["No","Are you sure?","Really?","Think again…","Pretty please?","Don’t do this","Last chance?","I’m shy now","Catch me!"];
-const PLEAS = ["Hmm… maybe you misclicked? 🥺","Look at that big yes button, it’s lonely 💜","I made this just for you… 🌸","Pretty please? With lavender on top? 🫶","I’ll bring snacks. And hugs. Lots of hugs. 🤗","My heart is doing tiny sad flips… 🥹","Okay, I’m getting nervous now… 🙈","Fine, the No button is hiding. Try catching it! 🏃‍♀️💨"];
+const NO_LABELS = ["No","Are you sure?","Really?","Think again…","Pretty please?","Please don’t do this","Last chance?","Im begging you","Catch me!"];
+const PLEAS = ["Baby please just say yes🥺","Look at that big yes button, it’s lonely 💜","I made this just for you… 🌸","Please lovee","I’ll bring snacks. And hugs. Lots of hugs. 🤗","Ill give you everything🥹","Please say yes!!","Yes is the only correct answer!!"];
 const HEARTS = {
   ask: ["#FFFFFF","#F5D0FE","#E879F9","#C084FC","#8B5CF6","#FBCFE8","#7C3AED"],
   yes: ["#FFFFFF","#FDE68A","#F9A8D4","#E879F9","#C084FC","#FCD34D","#FB7185"],
@@ -76,37 +82,111 @@ let mode = "ask", theme = "ask", n = 0, dodging = false, wasNear = false, skipCl
 let W, H, dpr, noPos = { x: 0, y: 0 };
 const hearts = [], flowers = [], rain = [];
 
-// ---------- audio (one element + Web Audio gain, so volume fades work on phones) ----------
-// One element plays every song, one after the other. Several elements at once made phones
-// download all three songs together (slow, late start) and pause each other (cut-offs).
-let ctx = null, gain = null, el = null, cur = null, token = 0;
+// ---------- audio ----------
+// Every song is downloaded first and played from memory (see preload). Android, Windows and Mac set the
+// volume directly on the player; iPhones ignore that, so only they go through Web Audio. The main song
+// has its own player; the ending songs use a second one that is started inside the Yes / No click
+// (phones only allow sound that starts from a tap), and the two cross-fade.
+const DIRECT = (() => { const a = new Audio(); a.volume = 0.5; return a.volume === 0.5; })();
+let ctx = null, A = null, B = null, cur = null, curT = null;
+function mkTrack() {
+  const el = new Audio(); el.preload = "auto";
+  const t = { el, k: null, ready: false, want: false, offset: 0, ramp: 0 };
+  if (DIRECT) el.volume = 0;
+  else { t.g = ctx.createGain(); t.g.gain.value = 0; ctx.createMediaElementSource(el).connect(t.g); t.g.connect(ctx.destination); }
+  el.addEventListener("error", () => { $("fix").hidden = false; });
+  return t;
+}
+function level(t, v, sec) {                           // fade a track to volume v over sec seconds
+  if (!t) return;
+  if (DIRECT) {
+    clearInterval(t.ramp);
+    const from = t.el.volume, steps = Math.max(1, Math.round(sec * 20)); let i = 0;
+    t.ramp = setInterval(() => {
+      i++; t.el.volume = Math.min(1, Math.max(0, from + (v - from) * i / steps));
+      if (i >= steps) clearInterval(t.ramp);
+    }, 50);
+  } else {
+    const n = ctx.currentTime;
+    t.g.gain.cancelScheduledValues(n); t.g.gain.setValueAtTime(t.g.gain.value, n);
+    t.g.gain.linearRampToValueAtTime(v, n + Math.max(sec, 0.01));
+  }
+}
+async function fetchSong(k, onProgress, signal) {   // download a whole song (with progress) so it plays from memory
+  const c = SONGS[k];
+  try {
+    const r = await fetch(c.src + "?from=" + c.start, { signal });
+    if (!r.ok) throw new Error("missing");
+    const total = +r.headers.get("Content-Length") || 0, parts = [];
+    let got = 0;
+    const rd = r.body && r.body.getReader();
+    if (rd) for (;;) {
+      const { done, value } = await rd.read();
+      if (done) break;
+      parts.push(value); got += value.length;
+      if (onProgress) onProgress(got, total);
+    } else parts.push(await r.blob());
+    const cut = parseFloat(r.headers.get("X-Trimmed-From"));
+    c.blob = URL.createObjectURL(new Blob(parts, { type: "audio/mpeg" }));
+    c.cut = isNaN(cut) ? null : cut;                  // set when the server already trimmed the song
+  } catch (e) {}
+}
+function loadTrack(t, k) {                            // get a song ready at its start point (silent)
+  const c = SONGS[k];
+  clearInterval(t.ramp); t.k = k; t.ready = false; t.want = false;
+  if (DIRECT) t.el.volume = 0; else t.g.gain.value = 0;
+  t.offset = c.cut != null ? c.cut : 0;
+  t.el.src = c.blob || c.src;
+  const done = () => { t.ready = true; if (t.want) level(t, 1, c.fade); };
+  if (c.cut != null || !c.start) t.el.addEventListener("canplay", done, { once: true });
+  else {
+    t.el.addEventListener("loadedmetadata", () => { t.el.currentTime = c.start; }, { once: true });
+    t.el.addEventListener("seeked", done, { once: true });
+  }
+  t.el.load();
+}
+function startTrack(t) {                              // call this from a tap or click
+  t.want = true; if (ctx) ctx.resume();
+  const p = t.el.play(); if (p) p.catch(() => { $("fix").hidden = false; });
+  if (t.ready) level(t, 1, SONGS[t.k].fade);
+  setTimeout(() => { if (t.want && t.el.paused) $("fix").hidden = false; }, 2000);   // never fail silently
+}
 function setupAudio() {
-  ctx = new (window.AudioContext || window.webkitAudioContext)();
-  el = new Audio(); el.preload = "auto";
-  gain = ctx.createGain(); gain.gain.value = 0;
-  ctx.createMediaElementSource(el).connect(gain); gain.connect(ctx.destination);
+  if (!DIRECT) ctx = new (window.AudioContext || window.webkitAudioContext)();
+  A = mkTrack(); cur = "main"; curT = A;
 }
-function level(v, sec) {
-  if (!gain) return;
-  const t = ctx.currentTime;
-  gain.gain.cancelScheduledValues(t); gain.gain.setValueAtTime(gain.gain.value, t);
-  gain.gain.linearRampToValueAtTime(v, t + Math.max(sec, 0.01));
+function playEnding(k) {                              // call this straight from the Yes / No click
+  if (!A) return;
+  if (!B) B = mkTrack();
+  loadTrack(B, k); startTrack(B);
+  level(A, 0, k === "final" ? 0.4 : 1.5); setTimeout(() => A.el.pause(), 2000);   // the 10th No stops it almost at once
+  cur = k; curT = B;
 }
-function play(k) {
-  cur = k; const my = ++token, c = SONGS[k];
-  gain.gain.cancelScheduledValues(ctx.currentTime); gain.gain.setValueAtTime(0, ctx.currentTime);
-  el.src = c.src;
-  const p = el.play(); if (p) p.catch(() => {});          // started right away so phones allow it
-  el.addEventListener("loadedmetadata", () => { if (my === token) el.currentTime = c.start; }, { once: true });
-  const ready = () => { if (my === token) level(1, c.fade); };   // fade in only once the song is at its start point
-  el.addEventListener(c.start ? "seeked" : "playing", ready, { once: true });
+async function preload() {
+  const go = $("go"), ctl = new AbortController();
+  const show = (got, total) => { go.textContent = "Loading music… " + (total ? Math.round(100 * got / total) + "%" : (got / 1e6).toFixed(1) + " MB"); };
+  show(0, 0);
+  const timer = setTimeout(() => ctl.abort(), 40000);  // a very slow connection: stream the song instead of waiting forever
+  await fetchSong("main", show, ctl.signal);           // only the first song has to finish before Begin works
+  clearTimeout(timer);
+  try { loadTrack(A, "main"); } catch (e) {}
+  go.textContent = "Tap to begin"; go.disabled = false;
+  for (const k of ["final", "yes"]) await fetchSong(k);   // the ending songs download quietly afterwards, one at a time
 }
-function swap(k) {                       // quick fade-out of the old song, then fade the new one in
-  if (!ctx) return;
-  if (cur) level(0, 0.8);
-  setTimeout(() => play(k), cur ? 800 : 0);
-}
+$("fix").onclick = () => {                            // fallback: a fresh tap always lets the music start
+  $("fix").hidden = true;
+  if (curT) { if (curT.el.error) loadTrack(curT, curT.k); startTrack(curT); }
+};
 document.addEventListener("visibilitychange", () => { if (ctx && ctx.state !== "running") ctx.resume(); });
+if (P.get("debug")) {                                 // open the link with &debug=1 to see what the phone is doing
+  $("dbg").hidden = false;
+  setInterval(() => {
+    const e = curT && curT.el, v = e && (DIRECT ? e.volume : curT.g.gain.value);
+    $("dbg").textContent = "direct=" + DIRECT + " ctx=" + (ctx && ctx.state) + " song=" + cur + " ready=" + (e && e.readyState) +
+      " paused=" + (e && e.paused) + " vol=" + (v != null ? v.toFixed(2) : "-") + " t=" + (e ? e.currentTime.toFixed(1) : "-") +
+      " err=" + ((e && e.error && e.error.code) || "none") + " src=" + (e && e.src ? e.src.slice(0, 5) : "-");
+  }, 500);
+}
 
 // ---------- lyrics (looked up on LRCLIB, cached in this browser) ----------
 const LY = {};
@@ -145,8 +225,8 @@ async function loadLyrics(k) {
 setInterval(() => {
   const lines = cur && LY[cur];
   let text = "";
-  if (el && lines) {
-    const t = el.currentTime - LYRIC_OFFSET;
+  if (curT && lines) {
+    const t = curT.el.currentTime + curT.offset - LYRIC_OFFSET;
     for (const [time, line] of lines) { if (time <= t) text = line; else break; }
   }
   if ($("lyric").textContent !== text) $("lyric").textContent = text;
@@ -191,7 +271,7 @@ no.onclick = () => {
   if (n >= LET_GO_AT) return letGo();
   yes.style.fontSize = Math.min(18 + n * 2, 38, W / 12) + "px";
   yes.style.padding = (10 + n) + "px " + (26 + n * 2) + "px";
-  level(1 - n / (LET_GO_AT - 1), 1.2);      // the music fades out as they keep saying no
+  level(A, Math.max(0.15, 1 - n / LET_GO_AT), 1.2);   // gets quieter with each No, but stays audible until the 10th click
   msg.textContent = PLEAS[Math.min(n - 1, PLEAS.length - 1)];
   no.textContent = NO_LABELS[Math.min(n, NO_LABELS.length - 1)];
   if (n >= DODGE_START) dodging = true;
@@ -199,19 +279,21 @@ no.onclick = () => {
 };
 function ending() { yes.hidden = no.hidden = true; const z = zone(); again.style.left = W / 2 + "px"; again.style.top = (z.top + z.bot) / 2 + "px"; again.hidden = false; }
 yes.onclick = () => {
-  mode = "yes"; dodging = false; swap("yes"); setTheme("yes"); plant(false); ending();
+  mode = "yes"; dodging = false; playEnding("yes"); setTheme("yes"); plant(false);
   $("title").textContent = "✿ ♥ ✿ ♥ ✿";
-  msg.textContent = `Yay!!! 💜🎉\n\nThank you, ${THEM}.\nI promise to make every day a little softer.\n\n— ${ME}`;
+  msg.textContent = `Yay!!! 💜🎉\n\nThank you, ${THEM}.\nI know that you were having a hard time choosing between yes and no. And thank you for still choosing yes. I promise that I will love you until the very end, support you in your dreams, give you the peace that you deserve and the comfort that you need, and never hinder you in life.\n I won't be able to promise that the time we'll spend together will always be sunshine and rainbows, that we won't hurt each other, or that we won't get mad at each other. But I can promise you that I'll do my very best to make sure you always feel my love. I'll make sure you receive all the love that I can give, because even the love I have for myself is yours.\n I won't waste this chance, I promise. So please, hang in there. I'll make you fall in love so hard that you won't be able to forget about me, even when you're asleep.\n\n— ${ME}`;
+  msg.className = "small"; card.classList.add("wide"); ending();   // the text is set first, so the button lands below the card
 };
 function letGo() {
-  mode = "letgo"; dodging = false; swap("final"); setTheme("no"); plant(true); ending();
-  $("title").textContent = "🕊️"; msg.className = "small";
-  msg.textContent = `It’s okay, ${THEM}.\n\nThank you for being honest with me, and for every moment we shared. I won’t hold on to something that isn’t meant to stay.\n\nI’m letting go with a full heart, and I’ll always wish you happiness. 💜\n\n— ${ME}`;
+  mode = "letgo"; dodging = false; playEnding("final"); setTheme("no"); plant(true);
+  $("title").textContent = "Its fine"; msg.className = "small";
+  msg.textContent = `It’s okay, ${THEM}.\n\nThank you for being honest with me. I'm proud of you for choosing your peace. Remember that I'll always be by your side. I'll always be here supporting you, looking out for you, and watching you succeed, just like the song suggests.\n\nJust pursue your dreams, protect your peace, be happy, and always be careful. Don't worry, my love will never change. Just like I always tell you, "Minamahal, mahal, at mamahalin kita." In the past, in the present, and in the future, I will always love you.\n\n— ${ME}`;
+  card.classList.add("wide"); ending();
 }
 again.onclick = () => location.reload();
 $("go").onclick = () => {
   $("start").remove();
-  try { setupAudio(); ctx.resume(); play("main"); } catch (e) {}
+  try { startTrack(A); } catch (e) { $("fix").hidden = false; }
 };
 
 // ---------- hearts, flowers, rain ----------
@@ -287,10 +369,12 @@ function frame(ts) {
 }
 
 // ---------- go ----------
-msg.textContent = `Hey ${THEM}, it’s ${ME} 💜\n\nWill you stay by my side?`;
+msg.textContent = `Hi ${THEM}, it’s ${ME} 💜\n\nCan you stay by my side?`;
 addEventListener("resize", size);
 size(); requestAnimationFrame(frame);
 setNo(W * 0.72, yes.getBoundingClientRect().top + yes.offsetHeight / 2);
+try { setupAudio(); } catch (e) {}
+preload();                                      // download the songs while the start screen shows
 for (const k in SONGS) loadLyrics(k);
 })();
 </script>
